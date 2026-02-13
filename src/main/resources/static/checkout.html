@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Checkout</title>
+<style>
+body{margin:0;font-family:'Segoe UI';background:#f4f6f9;}
+header{background:white;padding:15px 40px;box-shadow:0 2px 10px rgba(0,0,0,0.05);}
+.container{display:flex;gap:30px;padding:40px;}
+.form{flex:2;background:white;padding:25px;border-radius:10px;}
+.summary{flex:1;background:white;padding:25px;border-radius:10px;}
+input{width:100%;padding:10px;margin-bottom:15px;}
+button{padding:12px;background:black;color:white;border:none;width:100%;}
+.success{color:green;font-weight:bold;margin-top:15px;}
+</style>
+</head>
+<body>
+
+<header><h2>Checkout</h2></header>
+
+<div class="container">
+    <div class="form">
+        <h3>Shipping Details</h3>
+        <input placeholder="Full Name">
+        <input placeholder="Address">
+        <input placeholder="City">
+        <input placeholder="Phone">
+        <button onclick="placeOrder()">Pay Now</button>
+        <div id="message" class="success"></div>
+    </div>
+
+    <div class="summary">
+        <h3>Order Summary</h3>
+        <div id="summaryItems"></div>
+        <h2 id="total"></h2>
+    </div>
+</div>
+
+<script>
+function loadSummary(){
+    let cart=JSON.parse(localStorage.getItem("cart"))||[];
+    let total=0;
+    let container=document.getElementById("summaryItems");
+    container.innerHTML="";
+    cart.forEach(item=>{
+        total+=item.price*item.qty;
+        container.innerHTML+=`
+        <div>${item.name} x ${item.qty}</div>`;
+    });
+    document.getElementById("total").innerText="Total: ₹"+total;
+}
+
+function placeOrder(){
+    document.getElementById("message").innerText="Payment Successful! 🎉";
+    localStorage.removeItem("cart");
+}
+
+loadSummary();
+</script>
+
+</body>
+</html>
