@@ -1,20 +1,30 @@
 spring:
   application:
     name: product-service
+
   datasource:
     url: jdbc:mysql://localhost:3306/ecommerce?serverTimezone=UTC
     username: root
     password: root
+
   jpa:
     hibernate:
       ddl-auto: validate
-    show-sql: true
+    show-sql: false #true
     properties:
       hibernate:
-        format_sql: true
+        format_sql: false #true
         jdbc:
           time_zone: UTC
 
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: product-service
+      auto-offset-reset: earliest
+      enable-auto-commit: true
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
 
 server:
   port: 8081
@@ -22,3 +32,9 @@ server:
 machine:
   id: 2
 
+# logging:
+#   level:
+#     org:
+#       apache:
+#         http: WARN #DEBUG
+#         wire: WARN #DEBUG

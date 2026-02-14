@@ -79,7 +79,7 @@ public class ProductService {
                 .orElseThrow(() -> new RuntimeException("Inventory not found"));
 
         return new ProductResponse(
-                product.getId(),
+                String.valueOf(product.getId()),
                 product.getName(),
                 product.getDescription(),
                 product.getPrice(),
@@ -230,7 +230,7 @@ public List<ProductResponse> getAllProducts() {
 
     return products.stream()
             .map(product -> new ProductResponse(
-                    product.getId(),
+                    String.valueOf(product.getId()),
                     product.getName(),
                     product.getDescription(),
                     product.getPrice(),
@@ -256,7 +256,7 @@ public List<ProductResponse> getAllProducts() {
 
         return products.stream()
             .map(p -> new ProductResponse(
-                    p.getId(),
+                    String.valueOf(p.getId()),
                     p.getName(),
                     p.getDescription(),
                     p.getPrice(),

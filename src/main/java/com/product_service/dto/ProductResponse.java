@@ -5,7 +5,7 @@ import java.math.BigDecimal;
 import com.product_service.domain.ProductStatus;
 
 public record ProductResponse(
-        Long id,
+        String id,
         String name,
         String description,
         BigDecimal price,
