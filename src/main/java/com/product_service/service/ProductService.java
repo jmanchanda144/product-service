@@ -11,7 +11,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.product_service.domain.Inventory;
+import com.product_service.domain.InventoryFailedEvent;
+import com.product_service.domain.InventoryOutboxEvent;
 import com.product_service.domain.InventoryReservation;
+import com.product_service.domain.InventoryReservedEvent;
+import com.product_service.domain.OutboxStatus;
 import com.product_service.domain.Product;
 import com.product_service.domain.ProductStatus;
 import com.product_service.domain.ReservationStatus;
@@ -20,9 +24,12 @@ import com.product_service.dto.CreateProductRequest;
 import com.product_service.dto.ProductResponse;
 import com.product_service.exceptions.OutOfStockException;
 import com.product_service.id.SnowflakeIdGenerator;
+import com.product_service.repository.InventoryOutboxRepository;
 import com.product_service.repository.InventoryRepository;
 import com.product_service.repository.InventoryReservationRepository;
 import com.product_service.repository.ProductRepository;
+
+import tools.jackson.databind.ObjectMapper;
 
 @Service
 public class ProductService {
@@ -31,17 +38,22 @@ public class ProductService {
     private final InventoryRepository inventoryRepository;
     private final SnowflakeIdGenerator idGenerator;
     private final InventoryReservationRepository inventoryReservationRepository;
+    private final ObjectMapper objectMapper;
+    private final InventoryOutboxRepository inventoryOutboxRepository;
 
     public ProductService(ProductRepository productRepository,
                           InventoryRepository inventoryRepository,
                           SnowflakeIdGenerator idGenerator,
-                        InventoryReservationRepository inventoryReservationRepository) {
+                        InventoryReservationRepository inventoryReservationRepository,
+                        ObjectMapper objectMapper,
+                        InventoryOutboxRepository inventoryOutboxRepository) {
         this.productRepository = productRepository;
         this.inventoryRepository = inventoryRepository;
         this.idGenerator = idGenerator;
         this.inventoryReservationRepository=inventoryReservationRepository;
+        this.objectMapper = objectMapper;
+        this.inventoryOutboxRepository = inventoryOutboxRepository;
     }
-
     @Transactional
     public Long createProduct(CreateProductRequest request) {
 
@@ -151,9 +163,11 @@ public void confirmStock(Long orderId) {
     if (orderId == null)
         throw new IllegalArgumentException("Invalid orderId");
 
-    inventoryReservationRepository.confirmAll(
-            orderId,
-            Instant.now());
+    int updated =
+        inventoryReservationRepository.confirmAll(orderId, Instant.now());
+
+    if (updated == 0)
+        throw new IllegalStateException("No active reservation to confirm");
 }
 
 
@@ -278,75 +292,121 @@ public void reserveBulk(BulkReserveRequest request) {
 
     Instant now = Instant.now();
 
-    // fetch existing reservations once
-    List<InventoryReservation> existing =
-            inventoryReservationRepository.findAllByOrderId(orderId);
+    try {
 
-    Map<Long, InventoryReservation> existingMap =
-            existing.stream()
-                    .collect(Collectors.toMap(
-                            InventoryReservation::getProductId,
-                            r -> r));
+        List<InventoryReservation> existing =
+                inventoryReservationRepository.findAllByOrderId(orderId);
 
-    // fetch all products once
-    List<Long> productIds =
-            request.items()
-                    .stream()
-                    .map(BulkReserveRequest.Item::productId)
-                    .toList();
+        Map<Long, InventoryReservation> existingMap =
+                existing.stream()
+                        .collect(Collectors.toMap(
+                                InventoryReservation::getProductId,
+                                r -> r));
 
-    List<Product> products =
-            productRepository.findAllById(productIds);
+        List<Long> productIds =
+                request.items()
+                        .stream()
+                        .map(BulkReserveRequest.Item::productId)
+                        .toList();
 
-    Map<Long, Product> productMap =
-            products.stream()
-                    .collect(Collectors.toMap(Product::getId, p -> p));
+        List<Product> products =
+                productRepository.findAllById(productIds);
 
-    for (var item : request.items()) {
+        Map<Long, Product> productMap =
+                products.stream()
+                        .collect(Collectors.toMap(Product::getId, p -> p));
 
-        if (item.quantity() == null || item.quantity() <= 0)
-            throw new IllegalArgumentException("Invalid quantity");
+        for (var item : request.items()) {
 
-        Product product = productMap.get(item.productId());
+            if (item.quantity() == null || item.quantity() <= 0)
+                throw new IllegalArgumentException("Invalid quantity");
 
-        if (product == null)
-            throw new RuntimeException("Product not found");
+            Product product = productMap.get(item.productId());
 
-        if (product.getStatus() != ProductStatus.ACTIVE)
-            throw new IllegalStateException("Product inactive");
+            if (product == null)
+                throw new RuntimeException("Product not found");
 
-        InventoryReservation old =
-                existingMap.get(item.productId());
+            if (product.getStatus() != ProductStatus.ACTIVE)
+                throw new IllegalStateException("Product inactive");
 
-        if (old != null) {
-            if (old.getStatus() == ReservationStatus.PENDING)
-                continue;
-            else
-                throw new IllegalStateException("Already finalized");
+            InventoryReservation old =
+                    existingMap.get(item.productId());
+
+            if (old != null) {
+                if (old.getStatus() == ReservationStatus.PENDING)
+                    continue;
+                else
+                    throw new IllegalStateException("Already finalized");
+            }
+
+            int updated =
+                    inventoryRepository.reserveStockIfActive(
+                            item.productId(),
+                            item.quantity());
+
+            if (updated == 0)
+                throw new OutOfStockException(
+                        "Out of stock for product " + item.productId());
+
+            InventoryReservation reservation =
+                    new InventoryReservation();
+
+            reservation.setReservationId(idGenerator.nextId());
+            reservation.setProductId(item.productId());
+            reservation.setOrderId(orderId);
+            reservation.setQuantity(item.quantity());
+            reservation.setCreatedAt(now);
+            reservation.setExpiresAt(now.plusSeconds(600));
+            reservation.setStatus(ReservationStatus.PENDING);
+
+            inventoryReservationRepository.save(reservation);
         }
 
-        int updated =
-                inventoryRepository.reserveStockIfActive(
-                        item.productId(),
-                        item.quantity());
+        // ✅ SUCCESS EVENT
+        createOutboxEvent(
+                "inventory-events",
+                "InventoryReservedEvent",
+                orderId,
+                new InventoryReservedEvent("InventoryReservedEvent",orderId)
+        );
 
-        if (updated == 0)
-            throw new OutOfStockException(
-                    "Out of stock for product " + item.productId());
+    } catch (Exception e) {
 
-        InventoryReservation reservation =
-                new InventoryReservation();
+        // ✅ FAILURE EVENT
+        createOutboxEvent(
+                "inventory-events",
+                "InventoryFailedEvent",
+                orderId,
+                new InventoryFailedEvent("InventoryFailedEvent",orderId, e.getMessage())
+        );
 
-        reservation.setReservationId(idGenerator.nextId());
-        reservation.setProductId(item.productId());
-        reservation.setOrderId(orderId);
-        reservation.setQuantity(item.quantity());
-        reservation.setCreatedAt(now);
-        reservation.setExpiresAt(now.plusSeconds(600));
-        reservation.setStatus(ReservationStatus.PENDING);
-
-        inventoryReservationRepository.save(reservation);
+        throw e;
     }
 }
+
+    private void createOutboxEvent(
+            String topic,
+            String eventType,
+            Long aggregateId,
+            Object eventObject) {
+
+        try {
+
+            InventoryOutboxEvent outbox = new InventoryOutboxEvent();
+            outbox.setId(idGenerator.nextId());
+            outbox.setTopic(topic);
+            outbox.setEventType(eventType);
+            outbox.setAggregateId(aggregateId);
+            outbox.setPayload(objectMapper.writeValueAsString(eventObject));
+            outbox.setStatus(OutboxStatus.PENDING);
+            outbox.setRetryCount(0);
+            outbox.setCreatedAt(Instant.now());
+
+            inventoryOutboxRepository.save(outbox);
+
+        } catch (Exception ex) {
+            throw new RuntimeException("Outbox serialization failed", ex);
+        }
+    }
 
 }

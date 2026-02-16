@@ -4,16 +4,21 @@
 <meta charset="UTF-8">
 <title>Checkout</title>
 <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+<style>
+body { font-family: 'Segoe UI'; padding:40px; }
+input { display:block; margin:8px 0; padding:8px; width:300px; }
+button { padding:10px 20px; background:black; color:white; border:none; cursor:pointer; }
+</style>
 </head>
 <body>
 
 <h2>Checkout</h2>
 
-<input placeholder="Full Name">
-<input placeholder="Address">
-<input placeholder="City">
-<input placeholder="Phone">
-<br><br>
+<input id="fullName" placeholder="Full Name">
+<input id="address" placeholder="Address">
+<input id="city" placeholder="City">
+<input id="phone" placeholder="Phone">
+<br>
 
 <div id="summaryItems"></div>
 <h3 id="total"></h3>
@@ -22,33 +27,32 @@
 
 <script>
 
-const CHECKOUT_API=
-"http://localhost:8082/checkout";
+const CHECKOUT_API = "http://localhost:8082/checkout";
 
 function loadSummary(){
-    let cart=JSON.parse(localStorage.getItem("cart"))||[];
-    let total=0;
-    let html="";
+    let cart = JSON.parse(localStorage.getItem("cart")) || [];
+    let total = 0;
+    let html = "";
 
     cart.forEach(item=>{
-        total+=item.price*item.qty;
-        html+=`${item.name} x ${item.qty}<br>`;
+        total += item.price * item.qty;
+        html += `${item.name} x ${item.qty}<br>`;
     });
 
-    document.getElementById("summaryItems").innerHTML=html;
-    document.getElementById("total").innerText="Total: ₹"+total;
+    document.getElementById("summaryItems").innerHTML = html;
+    document.getElementById("total").innerText = "Total: ₹" + total;
 }
 
 async function placeOrder(){
 
-    let cart=JSON.parse(localStorage.getItem("cart"))||[];
+    let cart = JSON.parse(localStorage.getItem("cart")) || [];
 
-    const fullName=document.querySelectorAll("input")[0].value;
-    const addressLine1=document.querySelectorAll("input")[1].value;
-    const city=document.querySelectorAll("input")[2].value;
-    const phone=document.querySelectorAll("input")[3].value;
+    if(cart.length === 0){
+        alert("Cart is empty");
+        return;
+    }
 
-    const requestBody={
+    const requestBody = {
         userId:1,
         paymentMethod:"RAZORPAY",
         items:cart.map(item=>({
@@ -56,43 +60,108 @@ async function placeOrder(){
             quantity:item.qty
         })),
         address:{
-            fullName,
-            phone,
-            addressLine1,
-            city,
+            fullName: document.getElementById("fullName").value,
+            phone: document.getElementById("phone").value,
+            addressLine1: document.getElementById("address").value,
+            city: document.getElementById("city").value,
             state:"Delhi",
             pincode:"110001"
         }
     };
 
-    const response=await fetch(CHECKOUT_API,{
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify(requestBody)
-    });
+    try {
 
-    if(!response.ok){
-        const error=await response.text();
-        alert(error);
-        return;
-    }
+        const response = await fetch(CHECKOUT_API,{
+            method:"POST",
+            headers:{"Content-Type":"application/json"},
+            body:JSON.stringify(requestBody)
+        });
 
-    const razorpayOrderId=await response.text();
-
-    const options={
-        key:"rzp_test_SElR6dCtE9ARWL",
-        order_id:razorpayOrderId,
-        name:"My Store",
-        description:"Order Payment",
-        handler:function(){
-            alert("Payment Successful!");
-            localStorage.removeItem("cart");
-            window.location.href="index.html";
+        if(!response.ok){
+            const errorText = await response.text();
+            alert("Checkout failed: " + errorText);
+            return;
         }
-    };
 
-    const rzp=new Razorpay(options);
-    rzp.open();
+        const data = await response.json();
+
+        console.log("Checkout response:", data);
+
+        if(!data.checkoutId){
+            alert("Invalid checkout response");
+            return;
+        }
+
+        pollForPayment(data.checkoutId);
+
+    } catch(err){
+        console.error("Checkout error:", err);
+        alert("Something went wrong");
+    }
+}
+
+function pollForPayment(checkoutId){
+
+    console.log("Polling for checkoutId:", checkoutId);
+
+    const interval = setInterval(async ()=>{
+
+        try {
+
+            const res = await fetch(`${CHECKOUT_API}/${checkoutId}`);
+
+            if(!res.ok){
+                console.log("Order not ready yet...");
+                return;
+            }
+
+            const order = await res.json();
+
+            console.log("Order status:", order);
+
+            if(order.status === "PAYMENT_PENDING" && order.razorpayOrderId){
+
+                clearInterval(interval);
+
+                const options = {
+                    key:"rzp_test_SElR6dCtE9ARWL",
+                    amount: Number(order.totalAmount) * 100,
+                    currency:"INR",
+                    order_id: order.razorpayOrderId,
+                    name:"My Store",
+                    description:"Order Payment",
+
+                    handler:function(response){
+
+                        console.log("Payment success:", response);
+
+                        alert("Payment Successful");
+
+                        localStorage.removeItem("cart");
+                        window.location.href="index.html";
+                    },
+
+                    modal: {
+                        ondismiss: function(){
+                            console.log("Payment popup closed");
+                        }
+                    }
+                };
+
+                const rzp = new Razorpay(options);
+                rzp.open();
+            }
+
+            if(order.status === "CANCELLED"){
+                clearInterval(interval);
+                alert("Inventory failed");
+            }
+
+        } catch (err) {
+            console.log("Polling error:", err);
+        }
+
+    },1000);
 }
 
 loadSummary();

@@ -34,7 +34,7 @@ public class SnowflakeIdGenerator {
         if (timestamp == lastTimestamp) {
             sequence = (sequence + 1) & MAX_SEQUENCE;
             if (sequence == 0) {
-                while (timestamp == System.currentTimeMillis()) {}
+                while ((timestamp = System.currentTimeMillis()) == lastTimestamp) {}
             }
         } else {
             sequence = 0;
